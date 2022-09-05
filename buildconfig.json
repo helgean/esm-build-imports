@@ -1,0 +1,7 @@
+{
+    "sourcedir": "./testsrc",
+    "excludes": [
+        "*/ignored/**"
+    ],
+    "cleanOutput": false
+}

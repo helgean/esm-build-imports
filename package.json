@@ -1,0 +1,20 @@
+{
+  "dependencies": {
+    "minimatch": "^5.1.0",
+    "parse-imports": "^1.1.0",
+    "recursive-readdir": "^2.2.2",
+    "yargs": "^17.5.1"
+  },
+  "name": "esm-build",
+  "version": "1.0.3",
+  "description": "Build ESM imports with hash versioning",
+  "main": "index.mjs",
+  "scripts": {
+    "build": "node index.mjs"
+  },
+  "bin": {
+    "esm-build": "index.mjs"
+  },
+  "author": "Helge Andersen",
+  "license": "MIT"
+}
