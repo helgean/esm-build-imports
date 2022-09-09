@@ -3,10 +3,11 @@
     "minimatch": "^5.1.0",
     "parse-imports": "^1.1.0",
     "recursive-readdir": "^2.2.2",
+    "reurl": "^1.0.0-rc.2",
     "yargs": "^17.5.1"
   },
   "name": "esm-build",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "Build ESM imports with hash versioning",
   "main": "index.mjs",
   "scripts": {

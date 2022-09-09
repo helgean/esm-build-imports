@@ -2,7 +2,7 @@
     "sourcedir": "./testsrc",
     "outputdir": "./build",
     "excludes": [
-        "**/ignored/**"
+        "ignored/**"
     ],
     "cleanOutput": false
 }

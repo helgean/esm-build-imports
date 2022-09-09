@@ -4,7 +4,7 @@ import { PerformanceObserver, performance } from 'node:perf_hooks'
 import { Buffer } from 'node:buffer'
 import util from 'node:util'
 import path from 'node:path'
-import url from 'node:url'
+import { Url, RawUrl } from 'reurl'
 import crypto from 'node:crypto'
 import { exit } from 'node:process'
 import recursive from 'recursive-readdir'
@@ -37,6 +37,10 @@ function matchExcludes(file, excludes) {
     return false;
 }
 
+function getImportFile(parsedUrl) {
+    return parsedUrl ? `${parsedUrl.dirs.join('/')}/${parsedUrl.file}` : '';
+}
+
 const argv = yargs(hideBin(process.argv))
   .option('config', {
     description: 'The path to an optional config file',
@@ -58,7 +62,6 @@ if (argv.time) {
 
 async function build() {
 
-    console.log(argv.config);
     const configFile = argv.config || './buildconfig.json';
 
     // Read the config file
@@ -119,7 +122,7 @@ async function build() {
             await mkdirAsync(outputPathDir, { recursive: true });
 
         // copy file if not js file and skip to next file
-        if (path.extname(file).toLowerCase() !== '.js' || matchExcludes(file, excludes))        {
+        if (path.extname(file).toLowerCase() !== '.js' || matchExcludes(relativeFile, excludes))        {
             // copy file without changes;
             if (useOutputDir)
                 await outputFile(file, outputPath)
@@ -141,11 +144,8 @@ async function build() {
             continue;
         }
 
-        console.log(`Found imports in ${file}, adding new version hash..`);
+        console.log(`Found imports in ${file}..`);
         console.log(separator);
-
-        let indexModifier = 0;
-        let isModified = false;
 
         // Process import statements
         for (let importLine of imports) {
@@ -159,9 +159,10 @@ async function build() {
 
             // Process import statement
             const importUrl = importLine.moduleSpecifier.value;
-            const parsedUrl = importUrl ? new URL(importUrl) : undefined;
-            const importFile = parsedUrl ? parsedUrl.pathname : '';
-            const oldHash = parsedUrl ? parsedUrl.searchParams.get('v') : null;
+            const parsedUrl = importUrl ? new Url(importUrl) : undefined;
+            const importFile = getImportFile(parsedUrl);
+            const searchParams = new URLSearchParams(parsedUrl ? parsedUrl.query : '');
+            const oldHash = searchParams.get('v');
             const absolutePath = path.resolve(absoluteFilePath, importFile);
             const relativePath = path.relative(absoluteFilePath, absolutePath);
 
@@ -179,6 +180,7 @@ async function build() {
                     updatedFiles[file] = {
                         file: file,
                         filePath: absoluteFilePath,
+                        outputPath: outputPath,
                         imports: []
                     };
 
@@ -189,39 +191,10 @@ async function build() {
                     importLine: importLine
                 });
             }
-
-            /*
-            const startIndex = importLine.startIndex + indexModifier;
-            const endIndex = importLine.endIndex + indexModifier;
-
-            // Change the import statements by adding version argument
-            const codeLine = codeData.substring(startIndex, endIndex);
-            const newCodeLine = codeLine.replace(importUrl, `${importFile}?v=${hash}`);
-
-            console.log(newCodeLine);
-
-            codeData = codeData.slice(0, Math.max(startIndex, 0)) + newCodeLine + codeData.slice(endIndex);
-
-            indexModifier += newCodeLine.length - codeLine.length;
-
-            isModified = true;
-            */
         }
-
-        console.log(separator);
-
-        /*
-        // Output the file to the destination directory with correct sub folder structure
-        const outputFileData = new Uint8Array(Buffer.from(codeData));
-        const err = await writeFileAsync(useOutputDir ? outputPath : file, outputFileData);
-        if (err) throw err;
-
-        const outRelativePath = useOutputDir ? relativeOutputFile(outputPath) : file;
-
-        console.log(`${outRelativePath} written ${isModified ? 'modified' : 'unmodified'}`);
-        */
     }
 
+    // Perform the update on files that imports the changed files
 
     const updateFiles = Object.keys(updatedFiles).map(file => updatedFiles[file]);
 
@@ -238,7 +211,7 @@ async function build() {
 
             // Change the import statements by adding version argument
             const codeLine = codeData.substring(startIndex, endIndex);
-            const newCodeLine = codeLine.replace(importUrl, `${importFile}?v=${hash}`);
+            const newCodeLine = codeLine.replace(importLine.moduleSpecifier.value, `${importModule.file}?v=${importModule.hash}`);
 
             console.log(newCodeLine);
 
@@ -251,10 +224,10 @@ async function build() {
 
         // Output the file to the destination directory with correct sub folder structure
         const outputFileData = new Uint8Array(Buffer.from(codeData));
-        const err = await writeFileAsync(useOutputDir ? outputPath : updateFile.file, outputFileData);
+        const err = await writeFileAsync(useOutputDir ? updateFile.outputPath : updateFile.file, outputFileData);
         if (err) throw err;
 
-        const outRelativePath = useOutputDir ? relativeOutputFile(outputPath) : updateFile.file;
+        const outRelativePath = useOutputDir ? relativeOutputFile(updateFile.outputPath) : updateFile.file;
 
         console.log(`${outRelativePath} written ${isModified ? 'modified' : 'unmodified'}`);
     }
