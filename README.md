@@ -16,7 +16,9 @@ Copies every file from source folder to output folder while adding hash versioni
 ```
 
 If "outputdir" is omitted from the config file, the original files in the source folder will be modified in place.
+
 If "excludes" is included, i should contain an array of glob patterns to exclude files/folders.
+
 "cleanOutput": true - deletes output folder with all contents if "outputdir" is defined.
 
 

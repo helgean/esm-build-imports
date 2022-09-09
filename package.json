@@ -6,7 +6,7 @@
     "yargs": "^17.5.1"
   },
   "name": "esm-build",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Build ESM imports with hash versioning",
   "main": "index.mjs",
   "scripts": {

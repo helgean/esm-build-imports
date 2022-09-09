@@ -6,12 +6,12 @@ import util from 'node:util'
 import path from 'node:path'
 import url from 'node:url'
 import crypto from 'node:crypto'
+import { exit } from 'node:process'
 import recursive from 'recursive-readdir'
 import parseImports from 'parse-imports'
 import minimatch from 'minimatch'
 import yargs from 'yargs'
 import { hideBin } from 'yargs/helpers'
-import { exit } from 'node:process'
 
 const readFileAsync = util.promisify(readFile);
 const writeFileAsync = util.promisify(writeFile);
@@ -30,9 +30,9 @@ function hashFile(fileData) {
 
 function matchExcludes(file, excludes) {
     for (let pattern of excludes) {
-        console.log('match exclude '+pattern);
-        if (minimatch(file, pattern))
+        if (minimatch(file, pattern)) {
             return true;
+        }
     }
     return false;
 }
@@ -106,9 +106,10 @@ async function build() {
 
     for (let file of files) {
 
-        const filePath = path.dirname(file);
-        const relativePath = path.relative(config.sourcedir, file);
-        const outputPath = useOutputDir ? path.resolve(config.outputdir, relativePath) : undefined;
+        const relativeFile = path.relative(config.sourcedir, file);
+        const filePath = path.dirname(relativeFile);
+        const absoluteFilePath = path.resolve(config.sourcedir, filePath);
+        const outputPath = useOutputDir ? path.resolve(config.outputdir, relativeFile) : undefined;
         const outputPathDir = useOutputDir ? path.dirname(outputPath) : undefined;
 
         // create output directory if not exists
@@ -158,7 +159,13 @@ async function build() {
             // Process import statement
             const importUrl = importLine.moduleSpecifier.value;
             const importFile = importUrl ? url.parse(importUrl).pathname : '';
-            let absolutePath = path.resolve(filePath, importFile);
+            const absolutePath = path.resolve(absoluteFilePath, importFile);
+            const relativePath = path.relative(absoluteFilePath, absolutePath);
+
+            if (matchExcludes(relativePath, excludes)) {
+                console.log('exclude: ' + relativePath);
+                continue;
+            }
 
             // Hash file content of the imported file
             const fileData = await readFileAsync(absolutePath, 'utf8');
