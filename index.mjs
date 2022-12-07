@@ -12,6 +12,7 @@ import parseImports from 'parse-imports'
 import minimatch from 'minimatch'
 import yargs from 'yargs'
 import { hideBin } from 'yargs/helpers'
+import ProcessFile from './processfile.mjs'
 
 const readFileAsync = util.promisify(readFile);
 const writeFileAsync = util.promisify(writeFile);
@@ -21,25 +22,6 @@ const rmAsync = util.promisify(rm);
 const accessAsync = util.promisify(access);
 
 const separator = '-'.repeat(50);
-
-function hashFile(fileData) {
-    let hash = crypto.createHash('md5');
-	hash.update(fileData);
-	return hash.digest('hex');
-}
-
-function matchExcludes(file, excludes) {
-    for (let pattern of excludes) {
-        if (minimatch(file, pattern)) {
-            return true;
-        }
-    }
-    return false;
-}
-
-function getImportFile(parsedUrl) {
-    return parsedUrl ? `${parsedUrl.dirs.join('/')}/${parsedUrl.file}` : '';
-}
 
 const argv = yargs(hideBin(process.argv))
   .option('config', {
@@ -58,6 +40,29 @@ const argv = yargs(hideBin(process.argv))
 
 if (argv.time) {
   console.log('The current time is: ', new Date().toLocaleTimeString());
+}
+
+function matchExcludes(file, excludes) {
+    for (let pattern of excludes) {
+        if (minimatch(file, pattern)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+function updateFilesDep(processFile, processedFiles, acc) {
+    processFile.reflevel = Math.max(acc, processFile.reflevel);
+    if (processFile.hasImports) {
+        for (let imported of processFile.imports) {
+            const importedFile = processedFiles[imported.absolutePath];
+            if (importedFile) {
+                if (importedFile.references.indexOf(processFile.absoluteFilePath) == -1)
+                    importedFile.references.push(processFile.absoluteFilePath);
+                updateFilesDep(importedFile, processedFiles, acc + 1);
+            }
+        }
+    }
 }
 
 async function build() {
@@ -87,6 +92,7 @@ async function build() {
     const useOutputDir = !!config.outputdir;
     const destNotExists = await accessAsync(config.sourcedir, fsConstants.F_OK);
     const destionationExists = !destNotExists;
+    const processedFiles = {};
 
     if (useOutputDir && destionationExists && (argv.clean === true || config.cleanOutput === true)) {
         console.log(`Remove existing files from ${config.outputdir}`);
@@ -104,131 +110,94 @@ async function build() {
         return await copyFileAsync(file, outputFile);
     };
 
-    const updatedFiles = [];
-
     // Find recursively all files in the source directory
     const files = await recursive(config.sourcedir);
 
     for (let file of files) {
 
-        const relativeFile = path.relative(config.sourcedir, file);
-        const filePath = path.dirname(relativeFile);
-        const absoluteFilePath = path.resolve(config.sourcedir, filePath);
-        const outputPath = useOutputDir ? path.resolve(config.outputdir, relativeFile) : undefined;
-        const outputPathDir = useOutputDir ? path.dirname(outputPath) : undefined;
+        const processFile = new ProcessFile(file, config.sourcedir, config.outputdir, excludes);
 
         // create output directory if not exists
         if (useOutputDir)
-            await mkdirAsync(outputPathDir, { recursive: true });
+            await mkdirAsync(processFile.outputPathDir, { recursive: true });
 
         // copy file if not js file and skip to next file
-        if (path.extname(file).toLowerCase() !== '.js' || matchExcludes(relativeFile, excludes))        {
+        if (path.extname(file).toLowerCase() !== '.js' || matchExcludes(processFile.relativeFile, excludes)) {
             // copy file without changes;
             if (useOutputDir)
-                await outputFile(file, outputPath)
+                await outputFile(file, processFile.outputPath)
             continue;
         }
 
-        // Read the content of the javascript file
-        let codeData = await readFileAsync(file, 'utf8');
-
-        // Parse all import statements
-        const imports = [...(await parseImports(codeData))];
+        // Process imports in this file
+        await processFile.process();
+        processedFiles[processFile.absolutePath] = processFile;
 
         // Check if js file has any import statements
-        if (imports.length == 0)
+        if (!processFile.hasImports)
         {
             // copy file without changes;
             if (useOutputDir)
-                await outputFile(file, outputPath)
+                await outputFile(file, processFile.outputPath)
             continue;
-        }
-
-        console.log(`Found imports in ${file}..`);
-        console.log(separator);
-
-        // Process import statements
-        for (let importLine of imports) {
-            //console.log(importLine);
-            const moduleType = importLine.moduleSpecifier.type;
-
-            // Only process relative or absolute file imports
-            if (moduleType !== 'relative' && moduleType !== 'absolute') {
-                continue;
-            }
-
-            // Process import statement
-            const importUrl = importLine.moduleSpecifier.value;
-            const parsedUrl = importUrl ? new Url(importUrl) : undefined;
-            const importFile = getImportFile(parsedUrl);
-            const searchParams = new URLSearchParams(parsedUrl ? parsedUrl.query : '');
-            const oldHash = searchParams.get('v');
-            const absolutePath = path.resolve(absoluteFilePath, importFile);
-            const relativePath = path.relative(absoluteFilePath, absolutePath);
-
-            if (matchExcludes(relativePath, excludes)) {
-                console.log('exclude: ' + relativePath);
-                continue;
-            }
-
-            // Hash file content of the imported file
-            const fileData = await readFileAsync(absolutePath, 'utf8');
-            const hash = hashFile(fileData);
-
-            if (oldHash != hash) {
-                if (!updatedFiles[file])
-                    updatedFiles[file] = {
-                        file: file,
-                        filePath: absoluteFilePath,
-                        outputPath: outputPath,
-                        imports: []
-                    };
-
-                updatedFiles[file].imports.push({
-                    file: importFile,
-                    filePath: absolutePath,
-                    hash: hash,
-                    importLine: importLine
-                });
-            }
         }
     }
 
-    // Perform the update on files that imports the changed files
+    // Update import dependency level
+    for (let file in processedFiles) {
+        updateFilesDep(processedFiles[file], processedFiles, 0);
+    }
 
-    const updateFiles = Object.keys(updatedFiles).map(file => updatedFiles[file]);
+    // Perform the update on files that imports the changed files
+    const updateFiles = Object.keys(processedFiles)
+        .map(file => processedFiles[file])
+        .sort((a, b) => b.reflevel - a.reflevel);
+
 
     for (let updateFile of updateFiles) {
         // Read the content of the javascript file
-        let codeData = await readFileAsync(updateFile.file, 'utf8');
         let indexModifier = 0;
         let isModified = false;
+
+        if (updateFile.hasImports) {
+            console.log(`\n${updateFile.file} has imports, performing version updates:`);
+            console.log(separator);
+        }
 
         for (let importModule of updateFile.imports) {
             const importLine = importModule.importLine;
             const startIndex = importLine.startIndex + indexModifier;
             const endIndex = importLine.endIndex + indexModifier;
 
-            // Change the import statements by adding version argument
-            const codeLine = codeData.substring(startIndex, endIndex);
-            const newCodeLine = codeLine.replace(importLine.moduleSpecifier.value, `${importModule.file}?v=${importModule.hash}`);
+            const importFile = processedFiles[importModule.absolutePath];
+            if (!importFile) {
+                console.log(`Could not process ${importModule.absolutePath}`);
+                continue;
+            }
+            await importFile.fetchFile();
+            importFile.generateVersion();
 
+            // Change the import statements by adding version argument
+            const codeLine = updateFile.codeData.substring(startIndex, endIndex);
+            const importUrl = importModule.importFile;
+            const newCodeLine = codeLine.replace(importLine.moduleSpecifier.value, `${importUrl}?v=${importFile.hashVersion}`);
             console.log(newCodeLine);
 
-            codeData = codeData.slice(0, Math.max(startIndex, 0)) + newCodeLine + codeData.slice(endIndex);
-
+            const codeData = updateFile.codeData.slice(0, Math.max(startIndex, 0)) + newCodeLine + updateFile.codeData.slice(endIndex);
+            updateFile.codeData = codeData;
             indexModifier += newCodeLine.length - codeLine.length;
 
             isModified = true;
         }
 
         // Output the file to the destination directory with correct sub folder structure
-        const outputFileData = new Uint8Array(Buffer.from(codeData));
+        const outputFileData = new Uint8Array(Buffer.from(updateFile.codeData));
         const err = await writeFileAsync(useOutputDir ? updateFile.outputPath : updateFile.file, outputFileData);
         if (err) throw err;
 
         const outRelativePath = useOutputDir ? relativeOutputFile(updateFile.outputPath) : updateFile.file;
-
+        if (isModified)
+            console.log(separator);
         console.log(`${outRelativePath} written ${isModified ? 'modified' : 'unmodified'}`);
     }
 
